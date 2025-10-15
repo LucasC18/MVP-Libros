@@ -362,8 +362,8 @@ async function openHistory(bookId, bookTitle=''){
 }
 
 async function loadHistoryPage(){
-  const q = new URLSearchParams({ page: historyState.page, limit: historyState.limit });
-  const res = await api(`/api/logs/libros/${historyState.bookId}?${q}`);
+const q = new URLSearchParams({ page: historyState.page, limit: historyState.limit });
+const res = await api(`/api/logs/libros/${historyState.bookId}?${q}`);
 
   historyState.totalPages = res.totalPages || 1;
 
@@ -435,3 +435,14 @@ function showHistoryModal(show){
     if (historyState.page < historyState.totalPages) { historyState.page++; await loadHistoryPage(); }
   });
 })();
+
+async function loadHistoryPage(){
+  try {
+    const q = new URLSearchParams({ page: historyState.page, limit: historyState.limit });
+    const res = await api(`/api/logs/libros/${historyState.bookId}?${q}`);
+    // ... (render como ya lo tenés)
+  } catch (err) {
+    toast(err?.data?.error || 'No se pudo cargar el historial', 2400);
+    console.error('Historial error:', err);
+  }
+}
