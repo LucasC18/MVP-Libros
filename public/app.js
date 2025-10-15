@@ -114,28 +114,24 @@ const formLibro = $('#form-libro');
 
 formLibro?.addEventListener('submit', async (e)=>{
   e.preventDefault();
-
-  const btn = formLibro.querySelector('button[type="submit"]');
-  btn?.setAttribute('disabled','');
+  const fd = new FormData(formLibro);
+  const body = Object.fromEntries(fd.entries());
+  if (body.anio)   body.anio   = +body.anio;
+  if (body.stock)  body.stock  = +body.stock;
+  if (body.precio) body.precio = +body.precio;
+  body.isbn = genIsbn13();
 
   try{
-    const fd = new FormData(formLibro);
-    const body = Object.fromEntries(fd.entries());
-    // numéricos (conserva 0, elimina vacíos)
-    body.anio   = numOrUndef(body.anio);
-    body.stock  = numOrUndef(body.stock);
-    body.precio = numOrUndef(body.precio);
-    // backend exige isbn
-    body.isbn = genIsbn13();
-
-    const created = await api('/api/libros',{ method:'POST', body: JSON.stringify(body) });
+    const created = await api('/api/libros', { method:'POST', body: JSON.stringify(body) });
     toast(`📗 Agregado #${created.id}`);
     formLibro.reset();
-    await loadBooks(true);
+
+    const tbody = $('#tabla-libros tbody');
+    const tr = row(created);
+    tr.style.animation = 'pop .12s ease-out';
+    tbody.prepend(tr);                       // <— aparece al instante
   }catch(err){
     toast(err?.data?.error || 'No se pudo agregar', 2400);
-  }finally{
-    btn?.removeAttribute('disabled');
   }
 });
 
@@ -200,7 +196,7 @@ function row(b){
       <button class="btn danger" data-act="del">Eliminar</button>
     </td>
   `;
-  tr.querySelector('[data-act="history"]').onclick = ()=> openHistory(b.id, b.titulo);
+  tr.querySelector('[data-act="hist"]').onclick = ()=> openHistory(b.id);
   tr.querySelector('[data-act="edit"]').onclick     = ()=> openEdit(b);
   tr.querySelector('[data-act="del"]').onclick      = ()=> delBook(b.id, b.titulo);
   return tr;
@@ -227,31 +223,27 @@ async function confirmDialog({ title='Confirmar', text='¿Seguro?', okText='Acep
   });
 }
 
-async function delBook(id, titulo='') {
+async function delBook(id, titulo=''){
   const ok = await confirmDialog({
-    title: 'Eliminar libro',
+    title:'Eliminar libro',
     text: titulo ? `¿Eliminar (borrado lógico) “${titulo}”?` : '¿Eliminar este libro?',
-    okText: 'Eliminar',
-    okClass: 'danger'
+    okText:'Eliminar',
+    okClass:'danger'
   });
-  if (!ok) return;
-
-  try {
-    await api(`/api/libros/${id}`, { method: 'DELETE' });
-    toast('🗑️ Libro eliminado');
-
-    // 🧹 Quita la fila de la tabla directamente sin recargar todo
-    const tr = document.querySelector(`tr[data-id="${id}"]`);
-    if (tr) {
-      tr.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
-      tr.style.opacity = '0';
-      tr.style.transform = 'translateX(-20px)';
-      setTimeout(() => tr.remove(), 300);
+  if(!ok) return;
+  try{
+    const r = await api(`/api/libros/${id}`, { method:'DELETE' });
+    if (r?.deleted) {
+      document.querySelector(`tr[data-id="${id}"]`)?.remove();  // <— fuera de la tabla
+      toast('🗑️ Eliminado');
+    } else {
+      await loadBooks(true);
     }
-  } catch (err) {
-    toast(err?.data?.error || 'Error al eliminar');
+  }catch(err){
+    toast(err?.data?.error || 'No se pudo eliminar', 2400);
   }
 }
+
 
 /* =========================================================
  * EDITAR inline (PATCH) con animación
@@ -312,12 +304,13 @@ async function saveEdit(id){
     const updated = await api(`/api/libros/${id}`, { method:'PATCH', body: JSON.stringify(body) });
     const fresh = row(updated);
     fresh.style.animation = 'pop .12s ease-out';
-    tr.replaceWith(fresh);
+    tr.replaceWith(fresh);                   // <— actualizado en vivo
     toast('✅ Actualizado');
   }catch(err){
     toast(err?.data?.error || 'Error al actualizar', 2400);
   }
 }
+
 
 async function cancelEdit(id){
   try{
@@ -334,114 +327,47 @@ async function cancelEdit(id){
 }
 
 // ---------- Historial ----------
-const historyState = {
-  bookId: null,
-  page: 1,
-  limit: 10,
-  totalPages: 1,
-  title: ''
-};
+const historyState = { bookId:null, page:1, limit:10 };
 
-function formatDT(s){
-  try {
-    return new Date(s).toLocaleString();
-  } catch { return s; }
-}
-
-function jsonPretty(x){
-  return escapeHtml(JSON.stringify(x, null, 2));
-}
-
-async function openHistory(bookId, bookTitle=''){
+function openHistory(bookId){
   historyState.bookId = bookId;
   historyState.page = 1;
-  historyState.title = bookTitle || `#${bookId}`;
-  $('#historyTitle').textContent = `Historial de libro ${historyState.title}`;
-  await loadHistoryPage();
-  showHistoryModal(true);
+  loadHistoryPage().then(()=>{
+    $('#historyModal')?.classList.remove('hidden');
+  });
 }
+$('#historyClose')?.addEventListener('click', ()=> $('#historyModal')?.classList.add('hidden'));
+
+$('#historyPrev')?.addEventListener('click', ()=>{
+  if(historyState.page>1){ historyState.page--; loadHistoryPage(); }
+});
+$('#historyNext')?.addEventListener('click', ()=>{
+  if(historyState.page < (historyState.totalPages||1)){ historyState.page++; loadHistoryPage(); }
+});
 
 async function loadHistoryPage(){
-const q = new URLSearchParams({ page: historyState.page, limit: historyState.limit });
-const res = await api(`/api/logs/libros/${historyState.bookId}?${q}`);
-
-  historyState.totalPages = res.totalPages || 1;
-
-  const body = $('#historyBody');
-  body.innerHTML = '';
-
-  if (!res.data.length){
-    body.innerHTML = `<div class="history-item"><i>Sin movimientos</i></div>`;
-  }else{
-    for (const it of res.data){
-      const before = it.before || null;
-      const after  = it.after  || null;
-
-      // badge por acción
-      const badgeClass = it.action === 'delete' ? 'danger'
-                        : it.action === 'update' ? 'warn' : '';
-
-      const el = document.createElement('div');
-      el.className = 'history-item';
-      el.innerHTML = `
-        <div class="meta">
-          <span class="badge ${badgeClass}">${escapeHtml(it.action)}</span>
-          &nbsp; • &nbsp;
-          <b>${formatDT(it.created_at)}</b>
-          &nbsp; • &nbsp;
-          por ${it.changed_by ? ('#' + it.changed_by) : 'desconocido'}
-          ${it.ip ? ` &nbsp;•&nbsp; <span title="IP">IP:</span> ${escapeHtml(it.ip)}` : ''}
-        </div>
-
-        <details>
-          <summary>Detalles</summary>
-          <div style="margin-top:8px">
-            <div><b>Antes</b></div>
-            <pre>${before ? jsonPretty(before) : '(sin datos)'}</pre>
-          </div>
-          <div style="margin-top:8px">
-            <div><b>Después</b></div>
-            <pre>${after ? jsonPretty(after) : '(sin datos)'}</pre>
-          </div>
-        </details>
-      `;
-      body.appendChild(el);
-    }
-  }
-
-  // paginación
-  $('#histPageInfo').textContent = `Página ${res.page} / ${historyState.totalPages}`;
-  $('#histPrev').disabled = res.page <= 1;
-  $('#histNext').disabled = res.page >= historyState.totalPages;
-}
-
-function showHistoryModal(show){
-  const m = $('#historyModal');
-  if (show) m.classList.remove('hidden');
-  else m.classList.add('hidden');
-}
-
-// Bindings del modal
-(function bindHistoryModalOnce(){
-  const close = ()=> showHistoryModal(false);
-  $('#historyClose')?.addEventListener('click', close);
-  $('#historyOk')?.addEventListener('click', close);
-  $('[data-close-history]')?.addEventListener('click', close);
-
-  $('#histPrev')?.addEventListener('click', async ()=>{
-    if (historyState.page > 1) { historyState.page--; await loadHistoryPage(); }
-  });
-  $('#histNext')?.addEventListener('click', async ()=>{
-    if (historyState.page < historyState.totalPages) { historyState.page++; await loadHistoryPage(); }
-  });
-})();
-
-async function loadHistoryPage(){
-  try {
+  try{
     const q = new URLSearchParams({ page: historyState.page, limit: historyState.limit });
     const res = await api(`/api/logs/libros/${historyState.bookId}?${q}`);
-    // ... (render como ya lo tenés)
-  } catch (err) {
+    historyState.totalPages = res.totalPages || 1;
+
+    const tbody = $('#historyTable tbody');
+    tbody.innerHTML = '';
+    for (const it of res.data){
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${new Date(it.created_at).toLocaleString()}</td>
+        <td>${it.action}</td>
+        <td>${it.changed_by ?? '-'}</td>
+        <td><pre class="json">${escapeHtml(JSON.stringify(it.before ?? {}, null, 2))}</pre></td>
+        <td><pre class="json">${escapeHtml(JSON.stringify(it.after  ?? {}, null, 2))}</pre></td>
+      `;
+      tbody.appendChild(tr);
+    }
+    $('#historyPageInfo').textContent = `Página ${res.page} / ${res.totalPages}`;
+    $('#historyPrev').disabled = res.page<=1;
+    $('#historyNext').disabled = res.page>=res.totalPages;
+  }catch(err){
     toast(err?.data?.error || 'No se pudo cargar el historial', 2400);
     console.error('Historial error:', err);
   }

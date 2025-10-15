@@ -2,16 +2,14 @@
 import { Router } from 'express';
 import db from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { buildPaging } from '../utils/paging.js';
-import { logChange } from '../utils/audit.js';
+import { logAction } from '../utils/audit.js';
 
 const router = Router();
-
-const isValidEstado = (v) => ['disponible', 'prestado', 'baja'].includes(v);
+const isValidEstado = v => ['disponible','prestado','baja'].includes(v);
 const now = () => new Date();
 
-/* -------------------- sanitize -------------------- */
-function sanitizeBook(body, { partial = false } = {}) {
+/* -------- helpers de sanitización -------- */
+function sanitizeBook(body, { partial=false } = {}) {
   const b = {};
   const setIf = (k, v) => { if (v !== undefined && v !== null && v !== '') b[k] = v; };
 
@@ -29,11 +27,9 @@ function sanitizeBook(body, { partial = false } = {}) {
 
   const currentYear = new Date().getFullYear() + 1;
   const errors = [];
-  const need = (k) => { if (!partial && (b[k] === undefined || b[k] === '')) errors.push(`Campo requerido: ${k}`); };
+  const need = k => { if (!partial && (b[k] === undefined || b[k] === '')) errors.push(`Campo requerido: ${k}`); };
 
-  need('titulo');
-  need('autor');
-
+  need('titulo'); need('autor');
   if (b.stock !== undefined && b.stock < 0) errors.push('stock ≥ 0');
   if (b.precio !== undefined && b.precio < 0) errors.push('precio ≥ 0');
   if (b.anio !== undefined && (b.anio < 1800 || b.anio > currentYear)) errors.push(`anio entre 1800 y ${currentYear}`);
@@ -42,134 +38,60 @@ function sanitizeBook(body, { partial = false } = {}) {
   return { b, errors };
 }
 
-/* -------------------- LISTADO -------------------- */
+/* -------- LISTA (oculta bajas por defecto) -------- */
 router.get('/', requireAuth, async (req, res, next) => {
   try {
-    const page  = Math.max(1, Number(req.query.page  || 1));
+    const page  = Math.max(1, Number(req.query.page || 1));
     const limit = Math.max(1, Number(req.query.limit || 10));
     const offset = (page - 1) * limit;
 
     const search = (req.query.search || '').trim();
-    const sortBy = ['created_at', 'titulo', 'autor', 'anio', 'precio', 'stock'].includes(req.query.sortBy)
-      ? req.query.sortBy : 'created_at';
-    const sortDir = req.query.sortDir === 'asc' ? 'ASC' : 'DESC';
+    const includeBaja = req.query.includeBaja === 'true';
 
-    const like = `%${search}%`;
+    const whereParts = [];
+    const params = [];
+    let p = 1;
 
-    if (db.engine === 'pg') {
-      const where = search
-        ? `WHERE (titulo ILIKE $1 OR autor ILIKE $1 OR categoria ILIKE $1)`
-        : '';
-      const paramsCount = search ? [like] : [];
-      const countSQL = `SELECT COUNT(*)::int AS total FROM books ${where}`;
-      const { rows: countRows } = await db.query(countSQL, paramsCount);
-      const total = countRows[0]?.total || 0;
-
-      const dataParams = search ? [like, limit, offset] : [limit, offset];
-      const whereData = search
-        ? `WHERE (titulo ILIKE $1 OR autor ILIKE $1 OR categoria ILIKE $1)`
-        : '';
-      const dataSQL = `
-        SELECT *
-        FROM books
-        ${whereData}
-        ORDER BY ${sortBy} ${sortDir}
-        LIMIT $${search ? 2 : 1} OFFSET $${search ? 3 : 2}
-      `;
-      const { rows } = await db.query(dataSQL, dataParams);
-
-      return res.json({
-        data: rows,
-        page, limit, total,
-        totalPages: Math.max(1, Math.ceil(total / limit)),
-      });
+    if (search) {
+      whereParts.push(`(titulo ILIKE $${p} OR autor ILIKE $${p} OR categoria ILIKE $${p})`);
+      params.push(`%${search}%`); p++;
     }
+    if (!includeBaja) {
+      whereParts.push(`estado != 'baja'`);
+    }
+    const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
-    // MSSQL
-    const where = search ? 'WHERE (titulo LIKE ? OR autor LIKE ? OR categoria LIKE ?)' : '';
-    const params = search ? [like, like, like] : [];
-    const totalRes = await db.query(`SELECT COUNT(*) AS total FROM books ${where}`, params);
-    const total = totalRes.recordset?.[0]?.total || 0;
+    const totalSql = `SELECT COUNT(*)::int AS total FROM books ${where}`;
+    const totalRes = await db.query(totalSql, params);
+    const total = totalRes.rows[0]?.total || 0;
 
-    const { clause, order } = buildPaging(limit, offset);
-    const pagingParams = order(limit, offset);
-
-    const listRes = await db.query(
-      `
-      SELECT * FROM books
-      ${where}
-      ORDER BY ${sortBy} ${sortDir}
-      ${clause}
-      `,
-      [...params, ...pagingParams]
-    );
-
-    res.json({
-      data: listRes.recordset || [],
-      page, limit, total,
-      totalPages: Math.max(1, Math.ceil(total / limit)),
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-/* -------------------- GET by id -------------------- */
-router.get('/', requireAuth, async (req, res, next) => {
-  try {
-    const page  = Math.max(1, Number(req.query.page  || 1));
-    const limit = Math.max(1, Number(req.query.limit || 10));
-    const offset = (page - 1) * limit;
-
-    const searchRaw = (req.query.search || '').trim();
-    const search = searchRaw.length > 0 ? `%${searchRaw}%` : null;
-
-    const allowedSort = ['created_at', 'titulo', 'autor', 'anio', 'precio', 'stock', 'id'];
-    const sortBy = allowedSort.includes(req.query.sortBy) ? req.query.sortBy : 'created_at';
-    const sortDir = (req.query.sortDir === 'asc' ? 'ASC' : 'DESC');
-
-    // WHERE opcional solo si hay search
-    const where = search
-      ? `WHERE (titulo ILIKE $1 OR autor ILIKE $1 OR categoria ILIKE $1)`
-      : '';
-
-    /* ---- total ---- */
-    const countSql = `SELECT COUNT(*)::int AS total FROM books ${where}`;
-    const countParams = search ? [search] : [];
-    const countRes = await db.query(countSql, countParams);
-    const total = (countRes.rows?.[0]?.total) ?? 0;
-
-    /* ---- data ---- */
-    // Armamos los índices de parámetros en función de si usamos o no el $1 para search
-    const limitIdx  = search ? 2 : 1;
-    const offsetIdx = search ? 3 : 2;
-
-    const dataSql = `
+    const listSql = `
       SELECT *
       FROM books
       ${where}
-      ORDER BY ${sortBy} ${sortDir}
-      LIMIT $${limitIdx} OFFSET $${offsetIdx}
+      ORDER BY created_at DESC
+      LIMIT $${p} OFFSET $${p+1}
     `;
-    const dataParams = search ? [search, limit, offset] : [limit, offset];
-
-    const dataRes = await db.query(dataSql, dataParams);
-    const rows = dataRes.rows || [];
+    const listRes = await db.query(listSql, [...params, limit, offset]);
 
     res.json({
-      data: rows,
-      page,
-      limit,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / limit)),
+      data: listRes.rows || [],
+      page, limit, total,
+      totalPages: Math.max(1, Math.ceil(total/limit))
     });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
+/* -------- GET by id -------- */
+router.get('/:id', requireAuth, async (req, res, next) => {
+  try {
+    const r = await db.query('SELECT * FROM books WHERE id=$1', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'No encontrado' });
+    res.json(r.rows[0]);
+  } catch (err) { next(err); }
+});
 
-/* -------------------- CREATE -------------------- */
+/* -------- CREATE -------- */
 router.post('/', requireAuth, async (req, res, next) => {
   try {
     const { b, errors } = sanitizeBook(req.body);
@@ -177,131 +99,96 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     b.created_at = now();
     b.updated_at = now();
+    if (!b.estado) b.estado = 'disponible';
 
     const cols = Object.keys(b);
     const vals = Object.values(b);
-    const placeholders = cols.map(() => '?').join(', ');
+    const marks = cols.map((_,i)=>`$${i+1}`).join(', ');
 
-    const insertSql = `
+    const sql = `
       INSERT INTO books (${cols.join(', ')})
-      VALUES (${placeholders})
-      ${db.engine === 'pg' ? 'RETURNING *' : ''}
+      VALUES (${marks})
+      RETURNING *
     `;
+    const ins = await db.query(sql, vals);
+    const row = ins.rows[0];
 
-    const ins = await db.query(insertSql, vals);
-    let created;
-
-    if (db.engine === 'pg') {
-      created = ins.recordset[0];
-    } else {
-      const idRes = await db.query('SELECT TOP 1 id FROM books ORDER BY id DESC');
-      const id = idRes.recordset?.[0]?.id;
-      const rs = await db.query('SELECT * FROM books WHERE id = ?', [id]);
-      created = rs.recordset[0];
-    }
-
-    // 🔐 log create
-    await logChange({
-      entity: 'book',
-      entityId: created.id,
+    await logAction({
+      entity_type: 'book',
+      entity_id: row.id,
       action: 'create',
       before: null,
-      after: created,
-      req,
+      after: row,
+      changed_by: req.session?.user?.id || null,
+      ip: req.ip
     });
 
-    res.status(201).json(created);
+    res.status(201).json(row);
   } catch (err) { next(err); }
 });
 
-/* -------------------- PATCH (update parcial) -------------------- */
+/* -------- PATCH (update parcial) -------- */
 router.patch('/:id', requireAuth, async (req, res, next) => {
   try {
-    const id = req.params.id;
-
-    // Leer estado anterior
-    const prevRes = await db.query('SELECT * FROM books WHERE id = ?', [id]);
-    const before = (prevRes.recordset || [])[0];
-    if (!before) return res.status(404).json({ error: 'No encontrado' });
-
     const { b, errors } = sanitizeBook(req.body, { partial: true });
     if (errors.length) return res.status(400).json({ error: errors.join(', ') });
     if (!Object.keys(b).length) return res.status(400).json({ error: 'Sin cambios' });
 
+    const beforeRes = await db.query('SELECT * FROM books WHERE id=$1', [req.params.id]);
+    if (!beforeRes.rows.length) return res.status(404).json({ error: 'No encontrado' });
+    const before = beforeRes.rows[0];
+
     b.updated_at = now();
 
     const fields = Object.keys(b);
-    const setSql = fields.map(k => `${k} = ?`).join(', ');
-    const values = fields.map(k => b[k]);
+    const sets = fields.map((k,i)=>`${k}=$${i+1}`).join(', ');
+    const vals = fields.map(k=>b[k]);
 
-    const upd = await db.query(`UPDATE books SET ${setSql} WHERE id = ?`, [...values, id]);
-    if ((upd.rowsAffected?.[0] || 0) === 0) return res.status(404).json({ error: 'No encontrado' });
+    const upd = await db.query(
+      `UPDATE books SET ${sets} WHERE id=$${fields.length+1} RETURNING *`,
+      [...vals, req.params.id]
+    );
+    const row = upd.rows[0];
 
-    const rs = await db.query('SELECT * FROM books WHERE id = ?', [id]);
-    const after = rs.recordset[0];
-
-    // 🔐 log update (antes/después)
-    await logChange({
-      entity: 'book',
-      entityId: Number(id),
+    await logAction({
+      entity_type: 'book',
+      entity_id: row.id,
       action: 'update',
       before,
-      after,
-      req,
+      after: row,
+      changed_by: req.session?.user?.id || null,
+      ip: req.ip
     });
 
-    // (Opcional) log específico de stock si cambió
-    if (Object.prototype.hasOwnProperty.call(b, 'stock') && before?.stock !== after?.stock) {
-      const delta = (after?.stock ?? 0) - (before?.stock ?? 0);
-      await db.query(
-        `INSERT INTO book_stock_logs (book_id, previous_stock, new_stock, delta, reason, changed_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, now())`,
-        [
-          Number(id),
-          before?.stock ?? null,
-          after?.stock ?? null,
-          delta,
-          'edición manual',
-          req?.session?.user?.id ?? null
-        ]
-      );
-    }
-
-    res.json(after);
+    res.json(row);
   } catch (err) { next(err); }
 });
 
-/* -------------------- DELETE lógico (estado=baja) -------------------- */
+/* -------- DELETE lógico (estado=baja) -------- */
 router.delete('/:id', requireAuth, async (req, res, next) => {
   try {
-    const id = req.params.id;
-
-    // Estado anterior
-    const prevRes = await db.query('SELECT * FROM books WHERE id = ?', [id]);
-    const before = (prevRes.recordset || [])[0];
-    if (!before) return res.status(404).json({ error: 'No encontrado' });
+    const beforeRes = await db.query('SELECT * FROM books WHERE id=$1', [req.params.id]);
+    if (!beforeRes.rows.length) return res.status(404).json({ error: 'No encontrado' });
+    const before = beforeRes.rows[0];
 
     const upd = await db.query(
-      'UPDATE books SET estado = ?, updated_at = ? WHERE id = ?',
-      ['baja', now(), id]
+      `UPDATE books SET estado='baja', updated_at=$1 WHERE id=$2 RETURNING *`,
+      [now(), req.params.id]
     );
-    if ((upd.rowsAffected?.[0] || 0) === 0) return res.status(404).json({ error: 'No encontrado' });
+    const row = upd.rows[0];
 
-    // Estado después
-    const rs = await db.query('SELECT * FROM books WHERE id = ?', [id]);
-    const after = rs.recordset[0];
-
-    // 🔐 log delete (baja lógica)
-    await logChange({
-      entity: 'book',
-      entityId: Number(id),
+    await logAction({
+      entity_type: 'book',
+      entity_id: row.id,
       action: 'delete',
       before,
-      after, // después: estado='baja'
-      req,
+      after: row,
+      changed_by: req.session?.user?.id || null,
+      ip: req.ip
     });
 
-    res.json({ deleted: true });
+    // devolvemos deleted:true para que el front quite la fila del DOM
+    res.json({ deleted: true, id: row.id });
   } catch (err) { next(err); }
 });
 
