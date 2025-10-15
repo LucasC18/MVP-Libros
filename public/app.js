@@ -224,17 +224,30 @@ async function confirmDialog({ title='Confirmar', text='¿Seguro?', okText='Acep
   });
 }
 
-async function delBook(id, titulo=''){
+async function delBook(id, titulo='') {
   const ok = await confirmDialog({
-    title:'Eliminar libro',
+    title: 'Eliminar libro',
     text: titulo ? `¿Eliminar (borrado lógico) “${titulo}”?` : '¿Eliminar este libro?',
-    okText:'Eliminar',
-    okClass:'danger'
+    okText: 'Eliminar',
+    okClass: 'danger'
   });
-  if(!ok) return;
-  await api(`/api/libros/${id}`, { method:'DELETE' });
-  toast('🗑️ Marcado como baja');
-  await loadBooks(true);
+  if (!ok) return;
+
+  try {
+    await api(`/api/libros/${id}`, { method: 'DELETE' });
+    toast('🗑️ Libro eliminado');
+
+    // 🧹 Quita la fila de la tabla directamente sin recargar todo
+    const tr = document.querySelector(`tr[data-id="${id}"]`);
+    if (tr) {
+      tr.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+      tr.style.opacity = '0';
+      tr.style.transform = 'translateX(-20px)';
+      setTimeout(() => tr.remove(), 300);
+    }
+  } catch (err) {
+    toast(err?.data?.error || 'Error al eliminar');
+  }
 }
 
 /* =========================================================
