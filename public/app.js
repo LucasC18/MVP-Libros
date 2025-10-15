@@ -119,21 +119,20 @@ formLibro?.addEventListener('submit', async (e)=>{
   if (body.anio)   body.anio   = +body.anio;
   if (body.stock)  body.stock  = +body.stock;
   if (body.precio) body.precio = +body.precio;
-  body.isbn = genIsbn13();
 
   try{
-    const created = await api('/api/libros', { method:'POST', body: JSON.stringify(body) });
+    const created = await api('/api/libros',{ method:'POST', body: JSON.stringify(body) });
     toast(`📗 Agregado #${created.id}`);
     formLibro.reset();
-
-    const tbody = $('#tabla-libros tbody');
-    const tr = row(created);
-    tr.style.animation = 'pop .12s ease-out';
-    tbody.prepend(tr);                       // <— aparece al instante
+    await loadBooks(true);
   }catch(err){
-    toast(err?.data?.error || 'No se pudo agregar', 2400);
+    // <-- muestra realmente qué pasó (401, 500, validación, etc.)
+    const msg = err?.data?.error || err?.data || `Error ${err?.status||''}`;
+    toast(msg, 2600);
+    console.error('POST /api/libros failed:', err);
   }
 });
+
 
 /* =========================================================
  * LISTADO + BUSCADOR + PAGINADO

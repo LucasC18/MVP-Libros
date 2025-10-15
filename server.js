@@ -6,6 +6,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import helmet from "helmet";
+import pg from "pg";
+import connectPgSimple from "connect-pg-simple";
 
 import appRouter from "./src/app.js";
 import db from "./src/db.js"; // <-- Importá la conexión a la DB
@@ -143,3 +145,25 @@ app.use((err, req, res, next) => {
   console.error('❌', msg, err);
   res.status(status).json({ error: msg });
 });
+
+const PgStore = connectPgSimple(session);
+
+app.use(
+  session({
+    store: new PgStore({
+      // usa la misma DATABASE_URL que ya usás para Neon
+      conString: process.env.DATABASE_URL,
+      createTableIfMissing: true,   // crea la tabla "session" si no existe
+      tableName: 'session'          // opcional, default "session"
+    }),
+    secret: process.env.SESSION_SECRET || "supersecreto",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: 1000 * 60 * 60 * 8,   // 8h
+      secure: process.env.NODE_ENV === 'production',
+    },
+  })
+);
