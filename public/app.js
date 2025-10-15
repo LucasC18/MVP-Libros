@@ -5,6 +5,7 @@
 const $  = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => [...r.querySelectorAll(s)];
 
+/* ---------- UI helpers ---------- */
 function toast(msg, ms = 1800) {
   const t = $('#toast');
   if (!t) return;
@@ -20,6 +21,7 @@ function show(idShow, ...idsHide) {
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 
+/* ---------- Fetch wrapper (manejo 401 global) ---------- */
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     credentials: 'include',
@@ -28,16 +30,28 @@ async function api(path, opts = {}) {
   });
   const ct = res.headers.get('content-type') || '';
   const data = ct.includes('application/json') ? await res.json() : await res.text();
-  if (!res.ok) throw { status: res.status, data };
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      // Sesión expirada / no logueado -> volver a login
+      show('login', 'app');
+    }
+    throw { status: res.status, data };
+  }
   return data;
 }
 
-/* ---------- helpers ---------- */
+/* ---------- Helpers ---------- */
 const debounce = (fn, ms=420) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
+
 const escapeHtml = (s='') => String(s)
   .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
   .replaceAll('"','&quot;').replaceAll("'","&#039;");
+
 const genIsbn13 = ()=> String(Math.floor(1e12 + Math.random()*9e12)); // 13 dígitos
+
+// Convierte a número si hay valor; conserva 0; devuelve undefined si vacío
+const numOrUndef = v => (v === '' || v === null || v === undefined) ? undefined : +v;
 
 /* =========================================================
  * LOGIN
@@ -79,7 +93,9 @@ $('#logout')?.addEventListener('click', async ()=>{
     $('#adminName').textContent = `${me.username} (#${me.id})`;
     show('app','login');
     await loadBooks();
-  }catch{ show('login','app'); }
+  }catch{
+    show('login','app');
+  }
 })();
 
 async function enterDashboard(){
@@ -98,22 +114,28 @@ const formLibro = $('#form-libro');
 
 formLibro?.addEventListener('submit', async (e)=>{
   e.preventDefault();
-  const fd = new FormData(formLibro);
-  const body = Object.fromEntries(fd.entries());
-  // numeric
-  if (body.anio)   body.anio   = +body.anio;
-  if (body.stock)  body.stock  = +body.stock;
-  if (body.precio) body.precio = +body.precio;
-  // backend exige isbn
-  body.isbn = genIsbn13();
+
+  const btn = formLibro.querySelector('button[type="submit"]');
+  btn?.setAttribute('disabled','');
 
   try{
+    const fd = new FormData(formLibro);
+    const body = Object.fromEntries(fd.entries());
+    // numéricos (conserva 0, elimina vacíos)
+    body.anio   = numOrUndef(body.anio);
+    body.stock  = numOrUndef(body.stock);
+    body.precio = numOrUndef(body.precio);
+    // backend exige isbn
+    body.isbn = genIsbn13();
+
     const created = await api('/api/libros',{ method:'POST', body: JSON.stringify(body) });
     toast(`📗 Agregado #${created.id}`);
     formLibro.reset();
     await loadBooks(true);
   }catch(err){
     toast(err?.data?.error || 'No se pudo agregar', 2400);
+  }finally{
+    btn?.removeAttribute('disabled');
   }
 });
 
@@ -140,10 +162,13 @@ $('#next')?.addEventListener('click', ()=>{ if(state.page<state.totalPages){ sta
 async function loadBooks(keepPage=false){
   if(!keepPage) state.page = Math.max(1, state.page);
   const q = new URLSearchParams({ page: state.page, limit: state.limit, search: state.search });
+  // opcional: mostrar loading en tabla
+  const tbody = $('#tabla-libros tbody');
+  tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;opacity:.7">Cargando…</td></tr>';
+
   const res = await api(`/api/libros?${q}`); // { data, page, limit, total, totalPages }
   state.page = res.page; state.totalPages = res.totalPages || 1;
 
-  const tbody = $('#tabla-libros tbody');
   tbody.innerHTML = '';
   for (const b of res.data){
     const tr = row(b);
@@ -163,11 +188,11 @@ function row(b){
     <td>${escapeHtml(b.titulo||'')}</td>
     <td>${escapeHtml(b.autor||'')}</td>
     <td>${escapeHtml(b.editorial||'')}</td>
-    <td>${b.anio||''}</td>
+    <td>${b.anio??''}</td>
     <td>${escapeHtml(b.categoria||'')}</td>
     <td>${escapeHtml(b.ubicacion||'')}</td>
     <td>${b.stock??''}</td>
-    <td>${Number(b.precio||0).toFixed(2)}</td>
+    <td>${Number(b.precio??0).toFixed(2)}</td>
     <td>${escapeHtml(b.estado||'')}</td>
     <td class="row-actions">
       <button class="btn ghost" data-act="edit">Editar</button>
@@ -223,11 +248,11 @@ function openEdit(b){
     <td><input name="titulo" value="${escapeHtml(b.titulo||'')}"></td>
     <td><input name="autor" value="${escapeHtml(b.autor||'')}"></td>
     <td><input name="editorial" value="${escapeHtml(b.editorial||'')}"></td>
-    <td><input name="anio" type="number" min="1800" max="2100" value="${b.anio||''}"></td>
+    <td><input name="anio" type="number" min="1800" max="2100" value="${b.anio??''}"></td>
     <td><input name="categoria" value="${escapeHtml(b.categoria||'')}"></td>
     <td><input name="ubicacion" value="${escapeHtml(b.ubicacion||'')}"></td>
     <td><input name="stock" type="number" min="0" value="${b.stock??''}"></td>
-    <td><input name="precio" type="number" min="0" step="0.01" value="${Number(b.precio||0).toFixed(2)}"></td>
+    <td><input name="precio" type="number" min="0" step="0.01" value="${Number(b.precio??0).toFixed(2)}"></td>
     <td>
       <select name="estado">
         ${['disponible','prestado','baja'].map(x=>`<option value="${x}" ${x===b.estado?'selected':''}>${x}</option>`).join('')}
@@ -249,15 +274,17 @@ function getEditPayload(tr){
     titulo: val('titulo').trim(),
     autor: val('autor').trim(),
     editorial: val('editorial').trim(),
-    anio: val('anio') ? +val('anio') : undefined,
+    anio:   numOrUndef(val('anio')),
     categoria: val('categoria').trim(),
     ubicacion: val('ubicacion').trim(),
-    stock: val('stock') ? +val('stock') : undefined,
-    precio: val('precio') ? +val('precio') : undefined,
+    stock:  numOrUndef(val('stock')),
+    precio: numOrUndef(val('precio')),
     estado: val('estado')
   };
-  // eliminamos undefined para PATCH limpio
-  Object.keys(out).forEach(k => out[k] === '' || out[k] === undefined ? delete out[k] : 0);
+  // Limpiamos undefined y strings vacíos
+  Object.keys(out).forEach(k => {
+    if (out[k] === undefined || (typeof out[k] === 'string' && out[k] === '')) delete out[k];
+  });
   return out;
 }
 

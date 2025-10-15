@@ -11,4 +11,5 @@ router.use("/api/libros", booksRoutes);
 // página base de texto simple (opcional)
 router.get("/api", (req, res) => res.send("API del sistema de stock de libros funcionando"));
 
+
 export default router;

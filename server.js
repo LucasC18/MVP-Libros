@@ -90,3 +90,49 @@ app.use((err, req, res, next) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Servidor en http://localhost:${PORT}`);
 });
+
+const ORIGINS = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+// Confía en el proxy de Render (necesario para cookies secure)
+app.set('trust proxy', 1);
+
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin || ORIGINS.includes(origin)) return cb(null, true);
+    return cb(new Error('CORS not allowed'), false);
+  },
+  credentials: true,
+}));
+
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'dev-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    // Si frontend y API están en el MISMO dominio de Render → LAX
+    sameSite: 'lax',
+    // Si tu frontend está en OTRO dominio (por ej. GitHub Pages) usa:
+    // sameSite: 'none',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 1000 * 60 * 60 * 8,
+  },
+}));
+
+app.get('/api/db-health', async (req, res) => {
+  try {
+    const r = await db.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema='public' 
+      ORDER BY 1;
+    `);
+    res.json({ ok: true, tables: r.rows.map(x => x.table_name) });
+  } catch (e) {
+    console.error('DB-HEALTH ERROR', e);
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
