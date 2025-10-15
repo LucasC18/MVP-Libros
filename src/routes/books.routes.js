@@ -3,6 +3,7 @@ import { Router } from 'express';
 import db from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { buildPaging } from '../utils/paging.js';
+import { logChange } from '../utils/audit.js';
 
 const router = Router();
 
@@ -179,74 +180,127 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     const cols = Object.keys(b);
     const vals = Object.values(b);
+    const placeholders = cols.map(() => '?').join(', ');
+
+    const insertSql = `
+      INSERT INTO books (${cols.join(', ')})
+      VALUES (${placeholders})
+      ${db.engine === 'pg' ? 'RETURNING *' : ''}
+    `;
+
+    const ins = await db.query(insertSql, vals);
+    let created;
 
     if (db.engine === 'pg') {
-      const slots = cols.map((_, i) => `$${i + 1}`).join(', ');
-      const sql = `INSERT INTO books (${cols.join(', ')}) VALUES (${slots}) RETURNING *`;
-      const { rows } = await db.query(sql, vals);
-      return res.status(201).json(rows[0]);
+      created = ins.recordset[0];
+    } else {
+      const idRes = await db.query('SELECT TOP 1 id FROM books ORDER BY id DESC');
+      const id = idRes.recordset?.[0]?.id;
+      const rs = await db.query('SELECT * FROM books WHERE id = ?', [id]);
+      created = rs.recordset[0];
     }
 
-    // MSSQL
-    const placeholders = cols.map(() => '?').join(', ');
-    const insertSql = `INSERT INTO books (${cols.join(', ')}) VALUES (${placeholders})`;
-    await db.query(insertSql, vals);
-    const idRes = await db.query('SELECT TOP 1 id FROM books ORDER BY id DESC');
-    const id = idRes.recordset?.[0]?.id;
-    const rs = await db.query('SELECT * FROM books WHERE id = ?', [id]);
-    res.status(201).json(rs.recordset[0]);
-  } catch (err) {
-    next(err);
-  }
+    // 🔐 log create
+    await logChange({
+      entity: 'book',
+      entityId: created.id,
+      action: 'create',
+      before: null,
+      after: created,
+      req,
+    });
+
+    res.status(201).json(created);
+  } catch (err) { next(err); }
 });
 
 /* -------------------- PATCH (update parcial) -------------------- */
 router.patch('/:id', requireAuth, async (req, res, next) => {
   try {
+    const id = req.params.id;
+
+    // Leer estado anterior
+    const prevRes = await db.query('SELECT * FROM books WHERE id = ?', [id]);
+    const before = (prevRes.recordset || [])[0];
+    if (!before) return res.status(404).json({ error: 'No encontrado' });
+
     const { b, errors } = sanitizeBook(req.body, { partial: true });
     if (errors.length) return res.status(400).json({ error: errors.join(', ') });
     if (!Object.keys(b).length) return res.status(400).json({ error: 'Sin cambios' });
 
     b.updated_at = now();
 
-    if (db.engine === 'pg') {
-      const fields = Object.keys(b);
-      const values = Object.values(b);
-      const setSql = fields.map((k, i) => `${k} = $${i + 1}`).join(', ');
-      const sql = `UPDATE books SET ${setSql} WHERE id = $${fields.length + 1} RETURNING *`;
-      const { rows } = await db.query(sql, [...values, req.params.id]);
-      if (!rows.length) return res.status(404).json({ error: 'No encontrado' });
-      return res.json(rows[0]);
-    }
-
-    // MSSQL
     const fields = Object.keys(b);
     const setSql = fields.map(k => `${k} = ?`).join(', ');
     const values = fields.map(k => b[k]);
-    const upd = await db.query(`UPDATE books SET ${setSql} WHERE id = ?`, [...values, req.params.id]);
+
+    const upd = await db.query(`UPDATE books SET ${setSql} WHERE id = ?`, [...values, id]);
     if ((upd.rowsAffected?.[0] || 0) === 0) return res.status(404).json({ error: 'No encontrado' });
-    const rs = await db.query('SELECT * FROM books WHERE id = ?', [req.params.id]);
-    res.json(rs.recordset[0]);
+
+    const rs = await db.query('SELECT * FROM books WHERE id = ?', [id]);
+    const after = rs.recordset[0];
+
+    // 🔐 log update (antes/después)
+    await logChange({
+      entity: 'book',
+      entityId: Number(id),
+      action: 'update',
+      before,
+      after,
+      req,
+    });
+
+    // (Opcional) log específico de stock si cambió
+    if (Object.prototype.hasOwnProperty.call(b, 'stock') && before?.stock !== after?.stock) {
+      const delta = (after?.stock ?? 0) - (before?.stock ?? 0);
+      await db.query(
+        `INSERT INTO book_stock_logs (book_id, previous_stock, new_stock, delta, reason, changed_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, now())`,
+        [
+          Number(id),
+          before?.stock ?? null,
+          after?.stock ?? null,
+          delta,
+          'edición manual',
+          req?.session?.user?.id ?? null
+        ]
+      );
+    }
+
+    res.json(after);
   } catch (err) { next(err); }
 });
 
 /* -------------------- DELETE lógico (estado=baja) -------------------- */
 router.delete('/:id', requireAuth, async (req, res, next) => {
   try {
-    if (db.engine === 'pg') {
-      const { rowCount } = await db.query(
-        'UPDATE books SET estado = $1, updated_at = $2 WHERE id = $3',
-        ['baja', now(), req.params.id]
-      );
-      if (rowCount === 0) return res.status(404).json({ error: 'No encontrado' });
-      return res.json({ deleted: true });
-    }
-    // MSSQL
+    const id = req.params.id;
+
+    // Estado anterior
+    const prevRes = await db.query('SELECT * FROM books WHERE id = ?', [id]);
+    const before = (prevRes.recordset || [])[0];
+    if (!before) return res.status(404).json({ error: 'No encontrado' });
+
     const upd = await db.query(
       'UPDATE books SET estado = ?, updated_at = ? WHERE id = ?',
-      ['baja', now(), req.params.id]
+      ['baja', now(), id]
     );
     if ((upd.rowsAffected?.[0] || 0) === 0) return res.status(404).json({ error: 'No encontrado' });
+
+    // Estado después
+    const rs = await db.query('SELECT * FROM books WHERE id = ?', [id]);
+    const after = rs.recordset[0];
+
+    // 🔐 log delete (baja lógica)
+    await logChange({
+      entity: 'book',
+      entityId: Number(id),
+      action: 'delete',
+      before,
+      after, // después: estado='baja'
+      req,
+    });
+
     res.json({ deleted: true });
   } catch (err) { next(err); }
 });

@@ -2,6 +2,7 @@
 import { Router } from "express";
 import authRoutes from "./routes/auth.routes.js";
 import booksRoutes from "./routes/books.routes.js";
+import logsRoutes from './routes/logs.routes.js';
 
 const router = Router();
 
@@ -10,6 +11,8 @@ router.use("/api/libros", booksRoutes);
 
 // página base de texto simple (opcional)
 router.get("/api", (req, res) => res.send("API del sistema de stock de libros funcionando"));
+
+router.use('/api/logs', logsRoutes);
 
 
 export default router;

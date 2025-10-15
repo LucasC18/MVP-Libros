@@ -188,21 +188,24 @@ function row(b){
     <td>${escapeHtml(b.titulo||'')}</td>
     <td>${escapeHtml(b.autor||'')}</td>
     <td>${escapeHtml(b.editorial||'')}</td>
-    <td>${b.anio??''}</td>
+    <td>${b.anio||''}</td>
     <td>${escapeHtml(b.categoria||'')}</td>
     <td>${escapeHtml(b.ubicacion||'')}</td>
     <td>${b.stock??''}</td>
-    <td>${Number(b.precio??0).toFixed(2)}</td>
+    <td>${Number(b.precio||0).toFixed(2)}</td>
     <td>${escapeHtml(b.estado||'')}</td>
     <td class="row-actions">
+      <button class="btn ghost" data-act="history">Historial</button>
       <button class="btn ghost" data-act="edit">Editar</button>
       <button class="btn danger" data-act="del">Eliminar</button>
     </td>
   `;
-  tr.querySelector('[data-act="edit"]').onclick = ()=> openEdit(b);
-  tr.querySelector('[data-act="del"]').onclick  = ()=> delBook(b.id, b.titulo);
+  tr.querySelector('[data-act="history"]').onclick = ()=> openHistory(b.id, b.titulo);
+  tr.querySelector('[data-act="edit"]').onclick     = ()=> openEdit(b);
+  tr.querySelector('[data-act="del"]').onclick      = ()=> delBook(b.id, b.titulo);
   return tr;
 }
+
 
 /* =========================================================
  * ELIMINAR (Delete) con modal
@@ -329,3 +332,106 @@ async function cancelEdit(id){
     await loadBooks(true);
   }
 }
+
+// ---------- Historial ----------
+const historyState = {
+  bookId: null,
+  page: 1,
+  limit: 10,
+  totalPages: 1,
+  title: ''
+};
+
+function formatDT(s){
+  try {
+    return new Date(s).toLocaleString();
+  } catch { return s; }
+}
+
+function jsonPretty(x){
+  return escapeHtml(JSON.stringify(x, null, 2));
+}
+
+async function openHistory(bookId, bookTitle=''){
+  historyState.bookId = bookId;
+  historyState.page = 1;
+  historyState.title = bookTitle || `#${bookId}`;
+  $('#historyTitle').textContent = `Historial de libro ${historyState.title}`;
+  await loadHistoryPage();
+  showHistoryModal(true);
+}
+
+async function loadHistoryPage(){
+  const q = new URLSearchParams({ page: historyState.page, limit: historyState.limit });
+  const res = await api(`/api/logs/libros/${historyState.bookId}?${q}`);
+
+  historyState.totalPages = res.totalPages || 1;
+
+  const body = $('#historyBody');
+  body.innerHTML = '';
+
+  if (!res.data.length){
+    body.innerHTML = `<div class="history-item"><i>Sin movimientos</i></div>`;
+  }else{
+    for (const it of res.data){
+      const before = it.before || null;
+      const after  = it.after  || null;
+
+      // badge por acción
+      const badgeClass = it.action === 'delete' ? 'danger'
+                        : it.action === 'update' ? 'warn' : '';
+
+      const el = document.createElement('div');
+      el.className = 'history-item';
+      el.innerHTML = `
+        <div class="meta">
+          <span class="badge ${badgeClass}">${escapeHtml(it.action)}</span>
+          &nbsp; • &nbsp;
+          <b>${formatDT(it.created_at)}</b>
+          &nbsp; • &nbsp;
+          por ${it.changed_by ? ('#' + it.changed_by) : 'desconocido'}
+          ${it.ip ? ` &nbsp;•&nbsp; <span title="IP">IP:</span> ${escapeHtml(it.ip)}` : ''}
+        </div>
+
+        <details>
+          <summary>Detalles</summary>
+          <div style="margin-top:8px">
+            <div><b>Antes</b></div>
+            <pre>${before ? jsonPretty(before) : '(sin datos)'}</pre>
+          </div>
+          <div style="margin-top:8px">
+            <div><b>Después</b></div>
+            <pre>${after ? jsonPretty(after) : '(sin datos)'}</pre>
+          </div>
+        </details>
+      `;
+      body.appendChild(el);
+    }
+  }
+
+  // paginación
+  $('#histPageInfo').textContent = `Página ${res.page} / ${historyState.totalPages}`;
+  $('#histPrev').disabled = res.page <= 1;
+  $('#histNext').disabled = res.page >= historyState.totalPages;
+}
+
+function showHistoryModal(show){
+  const m = $('#historyModal');
+  if (show) m.classList.remove('hidden');
+  else m.classList.add('hidden');
+}
+
+// Bindings del modal
+(function bindHistoryModalOnce(){
+  const close = ()=> showHistoryModal(false);
+  $('#historyClose')?.addEventListener('click', close);
+  $('#historyOk')?.addEventListener('click', close);
+  $('[data-close-history]')?.addEventListener('click', close);
+
+  $('#histPrev')?.addEventListener('click', async ()=>{
+    if (historyState.page > 1) { historyState.page--; await loadHistoryPage(); }
+  });
+  $('#histNext')?.addEventListener('click', async ()=>{
+    if (historyState.page < historyState.totalPages) { historyState.page++; await loadHistoryPage(); }
+  });
+})();
