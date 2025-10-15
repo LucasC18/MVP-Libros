@@ -1,15 +1,14 @@
-// server.js
+import dotenv from 'dotenv';
+dotenv.config();
 import express from "express";
 import session from "express-session";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
-import dotenv from "dotenv";
 import helmet from "helmet";
 
 import appRouter from "./src/app.js";
 
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 13000;
