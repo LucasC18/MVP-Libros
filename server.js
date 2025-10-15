@@ -1,14 +1,16 @@
-import dotenv from 'dotenv';
-dotenv.config();
+// server.js
 import express from "express";
 import session from "express-session";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
+import dotenv from "dotenv";
 import helmet from "helmet";
 
 import appRouter from "./src/app.js";
+import db from "./src/db.js"; // <-- Importá la conexión a la DB
 
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 13000;
@@ -18,8 +20,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Seguridad básica (opcional por .env)
-if ((process.env.USE_HELMET || "false").toLowerCase() === "true") {
+// Seguridad básica
+if (process.env.USE_HELMET === "true") {
   app.use(helmet());
 }
 
@@ -40,13 +42,38 @@ app.use(
   })
 );
 
-// Rutas API
+// Rutas principales
 app.use(appRouter);
 
 // Servir frontend
 app.use(express.static(path.join(__dirname, "public")));
 
-// Healthcheck
+// 🔍 --- RUTA DE PRUEBA DE CONEXIÓN A LA BASE DE DATOS ---
+app.get("/api/db-health", async (req, res) => {
+  try {
+    console.log("🔍 Intentando conectar a DB...");
+    console.log("🔧 DATABASE_URL =", process.env.DATABASE_URL || "(undefined)");
+
+    const result = await db.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public'
+      ORDER BY 1;
+    `);
+
+    res.json({ ok: true, tables: result.rows.map(x => x.table_name) });
+  } catch (e) {
+    // Log lo más detallado posible al servidor
+    console.error("❌ Error real de conexión:", e);
+    // Y devolvemos algo que se pueda leer en el navegador
+    res
+      .status(500)
+      .json({ ok: false, error: e?.message || e?.code || JSON.stringify(e) });
+  }
+});
+
+
+// Healthcheck base
 app.get("/health", (req, res) =>
   res.json({ ok: true, ts: new Date().toISOString() })
 );

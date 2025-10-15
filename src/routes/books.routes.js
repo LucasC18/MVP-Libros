@@ -2,18 +2,22 @@
 import { Router } from 'express';
 import db from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { buildPaging } from '../utils/paging.js';
 
 const router = Router();
 
-const isValidEstado = (v) => ['disponible', 'prestado', 'baja'].includes(v);
-const now = () => new Date();
+// Helper: tomar filas del resultado sin importar el driver
+const rowsOf = (r) => r?.rows || r?.recordset || [];
 
+// Estados válidos
+const isValidEstado = (v) => ['disponible', 'prestado', 'baja'].includes(v);
+
+// -------- Sanitizador / validador --------
 function sanitizeBook(body, { partial = false } = {}) {
   const b = {};
-  const setIf = (k, v) => { if (v !== undefined && v !== null && v !== '') b[k] = v; };
+  const setIf = (k, v) => {
+    if (v !== undefined && v !== null && v !== '') b[k] = v;
+  };
 
-  setIf('isbn', body.isbn?.toString().trim());
   setIf('titulo', body.titulo?.toString().trim());
   setIf('autor', body.autor?.toString().trim());
   setIf('editorial', body.editorial?.toString().trim());
@@ -27,18 +31,30 @@ function sanitizeBook(body, { partial = false } = {}) {
 
   const currentYear = new Date().getFullYear() + 1;
   const errors = [];
-  const need = (k) => { if (!partial && (b[k] === undefined || b[k] === '')) errors.push(`Campo requerido: ${k}`); };
 
-  need('titulo'); need('autor');
+  const need = (k) => {
+    if (!partial && (b[k] === undefined || b[k] === '')) errors.push(`Campo requerido: ${k}`);
+  };
+
+  need('titulo');
+  need('autor');
+
   if (b.stock !== undefined && b.stock < 0) errors.push('stock ≥ 0');
   if (b.precio !== undefined && b.precio < 0) errors.push('precio ≥ 0');
-  if (b.anio !== undefined && (b.anio < 1800 || b.anio > currentYear)) errors.push(`anio entre 1800 y ${currentYear}`);
-  if (b.estado !== undefined && !isValidEstado(b.estado)) errors.push('estado inválido (disponible|prestado|baja)');
+  if (b.anio !== undefined && (b.anio < 1800 || b.anio > currentYear)) {
+    errors.push(`anio entre 1800 y ${currentYear}`);
+  }
+  if (b.estado !== undefined && !isValidEstado(b.estado)) {
+    errors.push('estado inválido (disponible|prestado|baja)');
+  }
 
   return { b, errors };
 }
 
-/* LISTADO */
+/* =========================================================
+ * LISTADO (GET /api/libros)
+ * ?search=&page=&limit=&sortBy=&sortDir=
+ * ======================================================= */
 router.get('/', requireAuth, async (req, res, next) => {
   try {
     const page = Math.max(1, Number(req.query.page || 1));
@@ -46,109 +62,199 @@ router.get('/', requireAuth, async (req, res, next) => {
     const offset = (page - 1) * limit;
 
     const search = (req.query.search || '').trim();
-    const sortBy = ['created_at', 'titulo', 'autor', 'anio', 'precio', 'stock'].includes(req.query.sortBy)
-      ? req.query.sortBy : 'created_at';
+
+    const sortByWhitelist = ['created_at', 'titulo', 'autor', 'anio', 'precio', 'stock'];
+    const sortBy = sortByWhitelist.includes(req.query.sortBy) ? req.query.sortBy : 'created_at';
     const sortDir = req.query.sortDir === 'asc' ? 'ASC' : 'DESC';
 
     const like = `%${search}%`;
-    const where = search ? 'WHERE (titulo LIKE ? OR autor LIKE ? OR categoria LIKE ?)' : '';
+    const where = search
+      ? `WHERE (titulo ILIKE ? OR autor ILIKE ? OR categoria ILIKE ?)`
+      : '';
     const params = search ? [like, like, like] : [];
 
-    const totalRes = await db.query(`SELECT COUNT(*) AS total FROM books ${where}`, params);
-    const total = (totalRes.recordset?.[0]?.total) ?? (totalRes.recordset?.[0]?.count) ?? 0;
+    // total
+    const countSql = `SELECT COUNT(*)::int AS total FROM books ${where};`;
+    const countRes = await db.query(countSql, params);
+    const total = rowsOf(countRes)[0]?.total || 0;
 
-    const { clause, order } = buildPaging(limit, offset);
-    const pagingParams = order(limit, offset);
-
-    const listRes = await db.query(
-      `
+    // listado
+    const listSql = `
       SELECT *
       FROM books
       ${where}
       ORDER BY ${sortBy} ${sortDir}
-      ${clause}
-      `,
-      [...params, ...pagingParams]
-    );
+      LIMIT ? OFFSET ?;
+    `;
+    const listRes = await db.query(listSql, [...params, limit, offset]);
+    const data = rowsOf(listRes);
 
     res.json({
-      data: listRes.recordset || [],
-      page, limit, total,
+      data,
+      page,
+      limit,
+      total,
       totalPages: Math.max(1, Math.ceil(total / limit)),
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
-/* GET id */
+/* =========================================================
+ * GET por id (GET /api/libros/:id)
+ * ======================================================= */
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
-    const rs = await db.query('SELECT * FROM books WHERE id = ?', [req.params.id]);
-    const row = (rs.recordset || [])[0];
+    const sql = `SELECT * FROM books WHERE id = ?;`;
+    const rs = await db.query(sql, [Number(req.params.id)]);
+    const row = rowsOf(rs)[0];
     if (!row) return res.status(404).json({ error: 'No encontrado' });
     res.json(row);
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
-/* CREATE */
+/* =========================================================
+ * CREAR (POST /api/libros)
+ * ======================================================= */
 router.post('/', requireAuth, async (req, res, next) => {
   try {
     const { b, errors } = sanitizeBook(req.body);
     if (errors.length) return res.status(400).json({ error: errors.join(', ') });
 
-    b.created_at = now();
-    b.updated_at = now();
-
-    const cols = Object.keys(b);
-    const vals = Object.values(b);
-    const placeholders = cols.map(() => '?').join(', ');
-
-    const insertSql = `
-      INSERT INTO books (${cols.join(', ')})
-      VALUES (${placeholders})
-      ${db.engine === 'pg' ? 'RETURNING *' : ''}
+    // Insert explícito con columnas fijas: evita comas colgantes
+    const sql = `
+      INSERT INTO books
+        (titulo, autor, editorial, anio, categoria, ubicacion, stock, precio, estado, notas, created_at, updated_at)
+      VALUES
+        (?,      ?,     ?,        ?,    ?,        ?,        ?,     ?,      ?,      ?,    now(),     now())
+      RETURNING *;
     `;
+    const params = [
+      (b.titulo || '').trim(),
+      (b.autor || '').trim(),
+      (b.editorial || '').trim(),
+      b.anio ?? null,
+      (b.categoria || '').trim(),
+      (b.ubicacion || '').trim(),
+      b.stock ?? 0,
+      b.precio ?? 0,
+      (b.estado || 'disponible').trim(),
+      (b.notas || '').trim(),
+    ];
 
-    const ins = await db.query(insertSql, vals);
+    // Logs útiles si algo falla
+    // console.log('INSERT SQL =>', sql);
+    // console.log('PARAMS =>', params);
 
-    if (db.engine === 'pg') {
-      return res.status(201).json(ins.recordset[0]);
-    }
-    // mssql: volver a leer
-    const idRes = await db.query('SELECT TOP 1 id FROM books ORDER BY id DESC');
-    const id = idRes.recordset?.[0]?.id;
-    const rs = await db.query('SELECT * FROM books WHERE id = ?', [id]);
-    res.status(201).json(rs.recordset[0]);
-  } catch (err) { next(err); }
+    const ins = await db.query(sql, params);
+    const row = rowsOf(ins)[0];
+    res.status(201).json(row);
+  } catch (err) {
+    next(err);
+  }
 });
 
-/* PATCH (update parcial) */
+/* =========================================================
+ * UPDATE total (PUT /api/libros/:id)
+ * ======================================================= */
+router.put('/:id', requireAuth, async (req, res, next) => {
+  try {
+    const { b, errors } = sanitizeBook(req.body, { partial: false });
+    if (errors.length) return res.status(400).json({ error: errors.join(', ') });
+
+    const id = Number(req.params.id);
+
+    const sql = `
+      UPDATE books SET
+        titulo    = ?, autor = ?, editorial = ?, anio = ?,
+        categoria = ?, ubicacion = ?, stock = ?, precio = ?,
+        estado    = ?, notas = ?, updated_at = now()
+      WHERE id = ?
+      RETURNING *;
+    `;
+    const params = [
+      (b.titulo || '').trim(),
+      (b.autor || '').trim(),
+      (b.editorial || '').trim(),
+      b.anio ?? null,
+      (b.categoria || '').trim(),
+      (b.ubicacion || '').trim(),
+      b.stock ?? 0,
+      b.precio ?? 0,
+      (b.estado || 'disponible').trim(),
+      (b.notas || '').trim(),
+      id,
+    ];
+
+    const upd = await db.query(sql, params);
+    const row = rowsOf(upd)[0];
+    if (!row) return res.status(404).json({ error: 'No encontrado' });
+    res.json(row);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* =========================================================
+ * UPDATE parcial (PATCH /api/libros/:id)
+ * ======================================================= */
 router.patch('/:id', requireAuth, async (req, res, next) => {
   try {
     const { b, errors } = sanitizeBook(req.body, { partial: true });
     if (errors.length) return res.status(400).json({ error: errors.join(', ') });
     if (!Object.keys(b).length) return res.status(400).json({ error: 'Sin cambios' });
 
-    b.updated_at = now();
+    const id = Number(req.params.id);
 
     const fields = Object.keys(b);
-    const setSql = fields.map(k => `${k} = ?`).join(', ');
-    const values = fields.map(k => b[k]);
+    const values = fields.map((k) => {
+      if (['anio', 'stock', 'precio'].includes(k)) {
+        const n = b[k];
+        return n === '' || n === null || n === undefined ? null : Number(n);
+      }
+      return (b[k] ?? '').toString().trim();
+    });
 
-    const upd = await db.query(`UPDATE books SET ${setSql} WHERE id = ?`, [...values, req.params.id]);
-    if ((upd.rowsAffected?.[0] || 0) === 0) return res.status(404).json({ error: 'No encontrado' });
+    // set dinámico + updated_at
+    const setSql = fields.map((k) => `${k} = ?`).join(', ');
+    const sql = `
+      UPDATE books SET ${setSql}, updated_at = now()
+      WHERE id = ?
+      RETURNING *;
+    `;
+    const params = [...values, id];
 
-    const rs = await db.query('SELECT * FROM books WHERE id = ?', [req.params.id]);
-    res.json(rs.recordset[0]);
-  } catch (err) { next(err); }
+    const upd = await db.query(sql, params);
+    const row = rowsOf(upd)[0];
+    if (!row) return res.status(404).json({ error: 'No encontrado' });
+    res.json(row);
+  } catch (err) {
+    next(err);
+  }
 });
 
-/* DELETE lógico -> estado=baja */
+/* =========================================================
+ * DELETE lógico (DELETE /api/libros/:id) -> estado='baja'
+ * ======================================================= */
 router.delete('/:id', requireAuth, async (req, res, next) => {
   try {
-    const upd = await db.query('UPDATE books SET estado = ?, updated_at = ? WHERE id = ?', ['baja', now(), req.params.id]);
-    if ((upd.rowsAffected?.[0] || 0) === 0) return res.status(404).json({ error: 'No encontrado' });
+    const id = Number(req.params.id);
+    const sql = `
+      UPDATE books
+      SET estado = 'baja', updated_at = now()
+      WHERE id = ?
+      RETURNING id;
+    `;
+    const r = await db.query(sql, [id]);
+    const row = rowsOf(r)[0];
+    if (!row) return res.status(404).json({ error: 'No encontrado' });
     res.json({ deleted: true });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;

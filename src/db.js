@@ -1,20 +1,17 @@
 // src/db.js
-import pkg from 'pg';
-const { Pool } = pkg;
+import pg from "pg";
+import dotenv from "dotenv";
+dotenv.config();
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }, // Neon requiere SSL
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL, // en Render: añade esto en Environment
+  ssl: { rejectUnauthorized: false },         // Neon/Render
 });
 
 export async function query(text, params = []) {
-  const client = await pool.connect();
-  try {
-    const res = await client.query(text, params);
-    return res; // { rows, rowCount, ... }
-  } finally {
-    client.release();
-  }
+  const res = await pool.query(text, params);
+  // normaliza a .rows
+  return { rows: res.rows, rowCount: res.rowCount };
 }
 
-export default { query };
+export default { query, engine: "pg" };
