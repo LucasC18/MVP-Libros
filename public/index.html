@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Stock Managment</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:,"> <!-- evita 404 de favicon -->
+</head>
+<body>
+
+  <!-- ========== LOGIN ========== -->
+  <section id="login" class="login-container">
+    <div class="login-left">
+      <h1>📚 Stock Managment</h1>
+      <p class="subtitle">Sistema de stock para colegios, rápido y simple.</p>
+
+      <ul class="features">
+        <li>🔍 Búsqueda por título, autor y categoría</li>
+        <li>✅ Altas, ediciones y bajas (lógicas)</li>
+        <li>🛡️ Acceso protegido para administradores</li>
+      </ul>
+
+      <p class="note">Ingresá con tu usuario administrador para continuar.</p>
+    </div>
+
+    <div class="login-right">
+      <div class="login-card">
+        <h2>Acceso administrador</h2>
+
+        <form id="loginForm" autocomplete="on">
+          <div class="input-group">
+            <span class="icon">👤</span>
+            <input type="text" name="username" placeholder="Usuario" value="admin" required />
+          </div>
+
+          <div class="input-group">
+            <span class="icon">🔒</span>
+            <input type="password" name="password" id="password" placeholder="Contraseña" required />
+            <button type="button" class="eye" id="togglePass" aria-label="Mostrar/ocultar contraseña">👁️</button>
+          </div>
+
+          <button type="submit" class="btn">Ingresar</button>
+        </form>
+
+        <p class="help">¿Problemas para entrar? Consultá al administrador del sistema.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== APP ========== -->
+  <section id="app" class="hidden">
+
+    <!-- Header -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">📚</span>
+        <div>
+          <h1>Control Stock – Colegio Calasanz</h1>
+          <small id="adminName">¡Bienvenido de vuelta!</small>
+        </div>
+      </div>
+
+      <button id="logout" class="btn ghost">Cerrar sesión</button>
+    </header>
+
+    <!-- Alta -->
+    <div class="card">
+      <div class="card-title">➕ Alta de libro</div>
+
+      <form id="form-libro" class="grid grid-6">
+        <input class="col-2" name="titulo"     placeholder="Título"        required>
+        <input class="col-2" name="autor"      placeholder="Autor"         required>
+        <input class="col-2" name="editorial"  placeholder="Editorial">
+        <input class="col-1" name="anio"       placeholder="Año" type="number" min="1800" max="2100">
+        <input class="col-1" name="categoria"  placeholder="Categoría">
+        <input class="col-1" name="ubicacion"  placeholder="Ubicación">
+        <input class="col-1" name="stock"      placeholder="Stock" type="number" min="0">
+        <input class="col-1" name="precio"     placeholder="Precio" type="number" min="0" step="0.01">
+        <select class="col-1" name="estado">
+          <option value="disponible" selected>Disponible</option>
+          <option value="prestado">Prestado</option>
+          <option value="baja">Baja</option>
+        </select>
+        <input class="col-4" name="notas" placeholder="Notas (opcional)">
+        <div class="col-2 align-end">
+          <button class="btn">Agregar</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Listado -->
+    <div class="card">
+      <div class="card-title">🗂️ Listado</div>
+
+      <div class="list-controls">
+        <div class="search">
+          <span>🔎</span>
+          <input id="txtSearch" type="text" placeholder="Buscar por título, autor o categoría…">
+        </div>
+
+        <div class="right-controls">
+          <label class="rows">
+            Por página
+            <select id="selLimit">
+              <option>10</option>
+              <option>20</option>
+              <option>50</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table id="tabla-libros" class="table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Título</th>
+              <th>Autor</th>
+              <th>Editorial</th>
+              <th>Año</th>
+              <th>Cat.</th>
+              <th>Ubicación</th>
+              <th>Stock</th>
+              <th>Precio</th>
+              <th>Estado</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="pager">
+        <button id="prev" class="btn ghost" disabled>« Prev</button>
+        <span id="pageInfo">Página 1 / 1</span>
+        <button id="next" class="btn ghost" disabled>Next »</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Toast -->
+  <div id="toast"></div>
+
+  <!-- Modal confirm -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-content">
+      <h3 id="modalTitle">Confirmar</h3>
+      <p id="modalText">¿Seguro?</p>
+      <div class="modal-actions">
+        <button id="modalCancel" class="btn ghost">Cancelar</button>
+        <button id="modalOk" class="btn danger">Eliminar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
