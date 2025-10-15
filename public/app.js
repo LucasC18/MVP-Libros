@@ -157,23 +157,23 @@ $('#next')?.addEventListener('click', ()=>{ if(state.page<state.totalPages){ sta
 async function loadBooks(keepPage=false){
   if(!keepPage) state.page = Math.max(1, state.page);
   const q = new URLSearchParams({ page: state.page, limit: state.limit, search: state.search });
-  // opcional: mostrar loading en tabla
-  const tbody = $('#tabla-libros tbody');
-  tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;opacity:.7">Cargando…</td></tr>';
-
-  const res = await api(`/api/libros?${q}`); // { data, page, limit, total, totalPages }
+  const res = await api(`/api/libros?${q}`);
   state.page = res.page; state.totalPages = res.totalPages || 1;
 
+  const tbody = $('#tabla-libros tbody');
+  if (!tbody) return; // por si falta el tbody en el DOM
   tbody.innerHTML = '';
-  for (const b of res.data){
+
+  const data = Array.isArray(res.data) ? res.data : [];
+  for (const b of data){
     const tr = row(b);
-    tr.style.animation = 'pop .12s ease-out';
     tbody.appendChild(tr);
   }
   $('#pageInfo').textContent = `Página ${res.page} / ${state.totalPages}`;
   $('#prev').disabled = res.page<=1;
   $('#next').disabled = res.page>=state.totalPages;
 }
+
 
 /* ---------- render fila ---------- */
 function row(b){
@@ -190,16 +190,21 @@ function row(b){
     <td>${Number(b.precio||0).toFixed(2)}</td>
     <td>${escapeHtml(b.estado||'')}</td>
     <td class="row-actions">
-      <button class="btn ghost" data-act="history">Historial</button>
       <button class="btn ghost" data-act="edit">Editar</button>
       <button class="btn danger" data-act="del">Eliminar</button>
     </td>
   `;
-  tr.querySelector('[data-act="hist"]').onclick = ()=> openHistory(b.id);
-  tr.querySelector('[data-act="edit"]').onclick     = ()=> openEdit(b);
-  tr.querySelector('[data-act="del"]').onclick      = ()=> delBook(b.id, b.titulo);
+  tr.style.animation = 'pop .12s ease-out';
+
+  const btnEdit = tr.querySelector('[data-act="edit"]');
+  if (btnEdit) btnEdit.onclick = ()=> openEdit(b);
+
+  const btnDel = tr.querySelector('[data-act="del"]');
+  if (btnDel) btnDel.onclick  = ()=> delBook(b.id, b.titulo);
+
   return tr;
 }
+
 
 
 /* =========================================================
@@ -255,11 +260,11 @@ function openEdit(b){
     <td><input name="titulo" value="${escapeHtml(b.titulo||'')}"></td>
     <td><input name="autor" value="${escapeHtml(b.autor||'')}"></td>
     <td><input name="editorial" value="${escapeHtml(b.editorial||'')}"></td>
-    <td><input name="anio" type="number" min="1800" max="2100" value="${b.anio??''}"></td>
+    <td><input name="anio" type="number" min="1800" max="2100" value="${b.anio||''}"></td>
     <td><input name="categoria" value="${escapeHtml(b.categoria||'')}"></td>
     <td><input name="ubicacion" value="${escapeHtml(b.ubicacion||'')}"></td>
     <td><input name="stock" type="number" min="0" value="${b.stock??''}"></td>
-    <td><input name="precio" type="number" min="0" step="0.01" value="${Number(b.precio??0).toFixed(2)}"></td>
+    <td><input name="precio" type="number" min="0" step="0.01" value="${Number(b.precio||0).toFixed(2)}"></td>
     <td>
       <select name="estado">
         ${['disponible','prestado','baja'].map(x=>`<option value="${x}" ${x===b.estado?'selected':''}>${x}</option>`).join('')}
@@ -271,9 +276,14 @@ function openEdit(b){
     </td>
   `;
   tr.style.animation = 'pop .12s ease-out';
-  tr.querySelector('[data-act="save"]').onclick   = ()=> saveEdit(b.id);
-  tr.querySelector('[data-act="cancel"]').onclick = ()=> cancelEdit(b.id);
+
+  const btnSave = tr.querySelector('[data-act="save"]');
+  if (btnSave) btnSave.onclick = ()=> saveEdit(b.id);
+
+  const btnCancel = tr.querySelector('[data-act="cancel"]');
+  if (btnCancel) btnCancel.onclick = ()=> cancelEdit(b.id);
 }
+
 
 function getEditPayload(tr){
   const val = (n)=> tr.querySelector(`[name="${n}"]`)?.value ?? '';
