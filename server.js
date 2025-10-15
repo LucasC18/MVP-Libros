@@ -136,3 +136,10 @@ app.get('/api/db-health', async (req, res) => {
     res.status(500).json({ ok: false, error: e.message || String(e) });
   }
 });
+
+app.use((err, req, res, next) => {
+  const status = err.status || 500;
+  const msg = err?.detail || err?.message || 'Error interno del servidor';
+  console.error('❌', msg, err);
+  res.status(status).json({ error: msg });
+});

@@ -124,7 +124,12 @@ router.post('/', requireAuth, async (req, res, next) => {
     });
 
     res.status(201).json(row);
-  } catch (err) { next(err); }
+  } catch (err) {
+    const msg = err?.detail || err?.message || 'Error';
+    console.error('❌ POST /api/libros', msg, err);
+    res.status(500).json({ error: msg });
+}
+
 });
 
 /* -------- PATCH (update parcial) -------- */
@@ -161,7 +166,11 @@ router.patch('/:id', requireAuth, async (req, res, next) => {
     });
 
     res.json(row);
-  } catch (err) { next(err); }
+} catch (err) {
+   const msg = err?.detail || err?.message || 'Error';
+   console.error('❌ PATCH /api/libros/:id', msg, err);
+  res.status(500).json({ error: msg });
+ }
 });
 
 /* -------- DELETE lógico (estado=baja) -------- */
@@ -189,7 +198,11 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
 
     // devolvemos deleted:true para que el front quite la fila del DOM
     res.json({ deleted: true, id: row.id });
-  } catch (err) { next(err); }
+} catch (err) {
+  const msg = err?.detail || err?.message || 'Error';
+  console.error('❌ DELETE /api/libros/:id', msg, err);
+ res.status(500).json({ error: msg });
+}
 });
 
 export default router;
