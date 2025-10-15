@@ -1,13 +1,18 @@
+// src/utils/audit.js
 import db from '../db.js';
 
+/**
+ * Registra una acción en la tabla audit_logs.
+ * Guarda el tipo de entidad, el id afectado, la acción y los datos antes/después.
+ */
 export async function logAction({
-  entity_type,       // 'book', 'user', etc.
-  entity_id = null,
-  action,            // 'create' | 'update' | 'delete' | ...
-  before = null,
-  after = null,
-  changed_by = null,
-  ip = null
+  entity_type,       // Ej: 'book', 'user'
+  entity_id = null,  // ID del registro afectado
+  action,            // Ej: 'create', 'update', 'delete'
+  before = null,     // Datos anteriores (JSON)
+  after = null,      // Datos nuevos (JSON)
+  changed_by = null, // ID del admin o usuario
+  ip = null          // IP opcional
 }) {
   try {
     await db.query(
